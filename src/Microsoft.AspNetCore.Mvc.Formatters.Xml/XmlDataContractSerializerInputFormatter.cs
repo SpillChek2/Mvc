@@ -23,7 +23,7 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
     /// This class handles deserialization of input XML data
     /// to strongly-typed objects using <see cref="DataContractSerializer"/>.
     /// </summary>
-    public class XmlDataContractSerializerInputFormatter : TextInputFormatter, IInbuiltInputFormatter
+    public class XmlDataContractSerializerInputFormatter : TextInputFormatter, IFormatterExceptionPolicy
     {
         private readonly ConcurrentDictionary<Type, object> _serializerCache = new ConcurrentDictionary<Type, object>();
         private readonly XmlDictionaryReaderQuotas _readerQuotas = FormattingUtilities.GetDefaultXmlReaderQuotas();
@@ -98,7 +98,11 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
             }
         }
 
-        public virtual bool SendBadRequestForExceptionsDuringDeserialization => false;
+        /// <summary>
+        /// Gets the flag indicating if it honors the value in setting <see cref="MvcOptions.ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors"/>.
+        /// Default value is <see langword="true"/>.
+        /// </summary>
+        public virtual bool HandlesExceptions => GetType() == typeof(XmlDataContractSerializerInputFormatter);
 
         /// <inheritdoc />
         public override async Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
@@ -149,9 +153,9 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
             }
             catch (Exception exception)
             {
-                if (SendBadRequestForExceptionsDuringDeserialization && exception is SerializationException)
+                if (exception is SerializationException)
                 {
-                    throw new InputFormatException("Error deserializing input", exception);
+                    throw new InputFormatterException(Resources.ErrorDeserializingInputData, exception);
                 }
 
                 throw;

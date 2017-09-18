@@ -63,6 +63,12 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
             SupportedMediaTypes.Add(MediaTypeHeaderValues.ApplicationJsonPatch);
         }
 
+        /// <summary>
+        /// Gets the flag indicating if it honors the value in setting <see cref="MvcOptions.ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors"/>.
+        /// Default value is <see langword="true"/>.
+        /// </summary>
+        public override bool HandlesExceptions => GetType() == typeof(JsonPatchInputFormatter);
+
         /// <inheritdoc />
         public async override Task<InputFormatterResult> ReadRequestBodyAsync(
             InputFormatterContext context,

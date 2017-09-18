@@ -170,19 +170,19 @@ namespace Microsoft.AspNetCore.Mvc
         public bool AllowBindingUndefinedValueToEnumType { get; set; }
 
         /// <summary>
-        /// Gets or sets the flag to determine if model binding should return a response with HTTP 400 Bad Request for
-        /// all exceptions(including ones not related to bad input) that occur during deserialization in <see cref="IInputFormatter"/>s.
+        /// Gets or sets the flag to determine if model binding should convert all exceptions(including ones not related to bad input)
+        /// that occur during deserialization in <see cref="IInputFormatter"/>s into model state errors.
         /// This flag applies only to custom <see cref="IInputFormatter"/>s. For modifying the behavior of in-built
-        /// <see cref="IInputFormatter"/>s, see <see cref="SendBadRequestForAllExceptionsDuringDeserializationInInbuiltFormatters"/>.
+        /// <see cref="IInputFormatter"/>s, see <see cref="ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors"/>.
         /// Defaults is <see langword="true"/>.
         /// </summary>
-        public bool SendBadRequestForAllExceptionsDuringInputFormatterDeserialization { get; set; } = true;
+        public bool ConvertAllExceptionsToModelStateErrors { get; set; } = true;
 
         /// <summary>
-        /// Gets or sets the flag to determine if model binding should return a response with HTTP 400 Bad Request for
-        /// all exceptions(including ones not related to bad input) that occur during deserialization in <see cref="IInputFormatter"/>s.
+        /// Gets or sets the flag to determine if model binding should convert all exceptions(including ones not related to bad input)
+        /// that occur during deserialization in <see cref="IInputFormatter"/>s into model state errors.
         /// This flag applies only to in-built <see cref="IInputFormatter"/>s. Defaults is <see langword="false"/>.
         /// </summary>
-        public bool SendBadRequestForAllExceptionsDuringDeserializationInInbuiltFormatters { get; set; } = false;
+        public bool ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors { get; set; } = false;
     }
 }

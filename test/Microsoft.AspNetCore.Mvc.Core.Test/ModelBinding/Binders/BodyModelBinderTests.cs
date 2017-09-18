@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Formatters;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.ObjectPool;
 using Microsoft.Net.Http.Headers;
@@ -196,7 +197,8 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
         [Theory]
         [InlineData(true)]
         [InlineData(false)]
-        public async Task BindModel_AddsErrorToModelState_ForInputFormatException(bool sendBadRequestForAllExceptionsDuringDeserialization)
+        public async Task BindModel_AddsErrorToModelState_ForCustomFormatter_ThrowingInputFormatterException(
+            bool sendBadRequestForAllExceptionsDuringDeserialization)
         {
             // Arrange
             var httpContext = new DefaultHttpContext();
@@ -210,13 +212,13 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
             var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
             var formatter = new XyzFormatter((inputFormatterContext, encoding) =>
             {
-                throw new InputFormatException("Your input is bad!", expectedFormatException);
+                throw new InputFormatterException("Your input is bad!", expectedFormatException);
             });
             var binder = CreateBinder(
                 new[] { formatter },
                 new MvcOptions()
                 {
-                    SendBadRequestForAllExceptionsDuringInputFormatterDeserialization = sendBadRequestForAllExceptionsDuringDeserialization
+                    ConvertAllExceptionsToModelStateErrors = sendBadRequestForAllExceptionsDuringDeserialization
                 });
 
             // Act
@@ -235,63 +237,33 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
             Assert.Same(expectedFormatException, formatException);
         }
 
-        [Fact]
-        public async Task SendBadRequestForAllExceptions_IsFalse_ThrowsForNonInputFormatException()
+        // Default behavior of in-built input formatters
+        public static TheoryData<IInputFormatter> FormattersThrowingInputFormatterException
         {
-            // Arrange
-            var httpContext = new DefaultHttpContext();
-            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
-            httpContext.Request.ContentType = "text/xyz";
-
-            var metadataProvider = new TestModelMetadataProvider();
-            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
-
-            var expectedException = new InvalidOperationException("Your input is bad!");
-            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
-            var formatter = new XyzFormatter((inputFormatterContext, encoding) =>
+            get
             {
-                throw expectedException;
-            });
-            var binder = CreateBinder(
-                new[] { formatter },
-                new MvcOptions()
+                return new TheoryData<IInputFormatter>()
                 {
-                    SendBadRequestForAllExceptionsDuringInputFormatterDeserialization = false
-                });
-
-            // Act
-            var actualException = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => binder.BindModelAsync(bindingContext));
-
-            // Assert
-            Assert.False(bindingContext.Result.IsModelSet);
-            Assert.Null(bindingContext.Result.Model);
-            Assert.Same(expectedException, actualException);
+                    new XmlSerializerInputFormatter(),
+                    new XmlDataContractSerializerInputFormatter(),
+                };
+            }
         }
 
-        [Fact]
-        public async Task SendBadRequestForAllExceptions_IsTrue_AddsErrorToModelState_ForNonInputFormatException()
+        [Theory]
+        [MemberData(nameof(FormattersThrowingInputFormatterException))]
+        public async Task BindModel_AddsErrorToModelState_ForXmlInputFormatters_ThrowingInputFormatterException(IInputFormatter formatter)
         {
             // Arrange
             var httpContext = new DefaultHttpContext();
             httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
-            httpContext.Request.ContentType = "text/xyz";
+            httpContext.Request.ContentType = "application/xml";
 
             var metadataProvider = new TestModelMetadataProvider();
             metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
             var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
-            var expectedException = new InvalidOperationException("Your input is bad!");
-            var formatter = new XyzFormatter((inputFormatterContext, encoding) =>
-            {
-                throw expectedException;
-            });
-            var binder = CreateBinder(
-                new[] { formatter },
-                new MvcOptions()
-                {
-                    SendBadRequestForAllExceptionsDuringInputFormatterDeserialization = true
-                });
+            var binder = CreateBinder(new[] { formatter }, new MvcOptions());
 
             // Act
             await binder.BindModelAsync(bindingContext);
@@ -304,133 +276,247 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
             var entry = Assert.Single(bindingContext.ModelState);
             Assert.Equal(string.Empty, entry.Key);
             var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
-            Assert.Equal("Your input is bad!", errorMessage);
-            var actualException = Assert.IsType<InvalidOperationException>(entry.Value.Errors[0].Exception);
-            Assert.Same(expectedException, actualException);
+            Assert.Equal("An error occured while deserializing input data.", errorMessage);
+            Assert.IsType<InputFormatterException>(entry.Value.Errors[0].Exception);
         }
 
-        //[Fact]
-        //public async Task XmlSerializerInputFormatter_AddsErrorToModelState_ForInputFormatException()
-        //{
-        //    // Arrange
-        //    var httpContext = new DefaultHttpContext();
-        //    httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
-        //    httpContext.Request.ContentType = "text/xml";
+        [Fact]
+        public async Task BindModel_AddsErrorToModelState_ForJsonInputFormatter_ThrowingInputFormatterException()
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = "application/json";
 
-        //    var metadataProvider = new TestModelMetadataProvider();
-        //    metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //    var expectedFormatException = new FormatException("bad format!");
-        //    var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
-        //    var formatter = new XmlSerializerInputFormatter();
-        //    var binder = CreateBinder(new[] { formatter }, new MvcOptions());
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { new TestableJsonInputFormatter(throwNonInputFormatterException: false) }, new MvcOptions());
 
-        //    // Act
-        //    await binder.BindModelAsync(bindingContext);
+            // Act
+            await binder.BindModelAsync(bindingContext);
 
-        //    Assert
-        //    Assert.False(bindingContext.Result.IsModelSet);
-        //    Assert.Null(bindingContext.Result.Model);
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
 
-        //    // Key is the empty string because this was a top-level binding.
-        //    var entry = Assert.Single(bindingContext.ModelState);
-        //    Assert.Equal(string.Empty, entry.Key);
-        //    var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
-        //    Assert.Equal("Your input is bad!", errorMessage);
-        //    var formatException = Assert.IsType<FormatException>(entry.Value.Errors[0].Exception.InnerException);
-        //    Assert.Same(expectedFormatException, formatException);
-        //}
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            Assert.IsType<JsonReaderException>(entry.Value.Errors[0].Exception);
+        }
 
-        //[Fact]
-        //public async Task XmlSerializerInputFormatter_NonInputFormatException()
-        //{
+        // Default behavior of in-built input formatters
+        public static TheoryData<IInputFormatter, string> FormattersThrowingNonInputFormatterException
+        {
+            get
+            {
+                return new TheoryData<IInputFormatter, string>()
+                {
+                    { new TestableXmlSerializerInputFormatter(throwNonInputFormatterException: true), "text/xml"},
+                    {  new TestableXmlDataContractSerializerInputFormatter(throwNonInputFormatterException: true), "text/xml"},
+                    { new TestableJsonInputFormatter(throwNonInputFormatterException: true), "text/json"}
+                };
+            }
+        }
 
-        //}
+        [Theory]
+        [MemberData(nameof(FormattersThrowingNonInputFormatterException))]
+        public async Task BindModel_Throws_ForBuiltInInputFormatters_ThrowingNonInputFormatterException(IInputFormatter formatter, string contentType)
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = contentType;
 
-        //[Fact]
-        //public async Task XmlDCSInputFormatter_InputFormatException()
-        //{
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //}
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { formatter }, new MvcOptions());
 
-        //[Fact]
-        //public async Task XmlDCSInputFormatter_NonInputFormatException()
-        //{
+            // Act
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => binder.BindModelAsync(bindingContext));
 
-        //}
+            // Assert
+            Assert.Equal("Bad input!!", exception.Message);
+        }
 
-        //[Fact]
-        //public async Task JsonInputFormatter_InputFormatException()
-        //{
+        // Modifying default behavior of in-built input formatters to add to model state for ALL exceptions
+        [Theory]
+        [MemberData(nameof(FormattersThrowingNonInputFormatterException))]
+        public async Task BindModel_Throws_ForXmlInputFormatters_ThrowingNonInputFormatterException_TrueInMvcOptions(IInputFormatter formatter, string contentType)
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = contentType;
 
-        //}
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //[Fact]
-        //public async Task JsonInputFormatter_NonInputFormatException()
-        //{
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { formatter }, new MvcOptions()
+            {
+                ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors = true
+            });
 
-        //}
+            // Act
+            await binder.BindModelAsync(bindingContext);
 
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
 
-        //[Fact]
-        //public async Task DerivedXmlSerializerInputFormatter_SendBadRequestForExceptions_IsFalse_InputFormatException()
-        //{
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
+            Assert.Equal("Bad input!!", errorMessage);
+            Assert.IsType<InvalidOperationException>(entry.Value.Errors[0].Exception);
+        }
 
-        //}
+        // Input formatters which have derived from in-built formatters might want to always send back bad request responses for all exceptions
+        public static TheoryData<IInputFormatter> DerivedInputFormattersOptingOutOfMvcOptionsPolicy_AndThrowsInputFormatterException
+        {
+            get
+            {
+                return new TheoryData<IInputFormatter>()
+                {
+                    new DerivedXmlSerializerInputFormatter(throwNonInputFormatterException: false),
+                    new DerivedXmlDataContractSerializerInputFormatter(throwNonInputFormatterException: false),
+                };
+            }
+        }
 
-        //[Fact]
-        //public async Task DerivedXmlSerializerInputFormatter_SendBadRequestForExceptions_IsFalse_NonInputFormatException()
-        //{
+        [Theory]
+        [MemberData(nameof(DerivedInputFormattersOptingOutOfMvcOptionsPolicy_AndThrowsInputFormatterException))]
+        public async Task BindModel_AddsErrorToModelState_ForDerivedXmlInputFormatters(IInputFormatter formatter)
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = "application/xml";
 
-        //}
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //[Theory]
-        //[InlineData(true)]
-        //[InlineData(false)]
-        //public async Task DerivedXmlSerializerInputFormatter_SendBadRequestForExceptions_IsTrue(bool isInputFormatException)
-        //{
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { formatter }, new MvcOptions());
 
-        //}
+            // Act
+            await binder.BindModelAsync(bindingContext);
 
-        //[Fact]
-        //public async Task DerivedXmlDCSInputFormatter_SendBadRequestForExceptions_IsFalse_InputFormatException()
-        //{
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
 
-        //}
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
+            Assert.Equal("An error occured while deserializing input data.", errorMessage);
+            Assert.IsType<InputFormatterException>(entry.Value.Errors[0].Exception);
+        }
 
-        //[Fact]
-        //public async Task DerivedXmlDCSInputFormatter_SendBadRequestForExceptions_IsFalse_NonInputFormatException()
-        //{
+        [Fact]
+        public async Task BindModel_AddsErrorToModelState_ForDerivedJsonInputFormatter()
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = "application/json";
 
-        //}
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //[Theory]
-        //[InlineData(true)]
-        //[InlineData(false)]
-        //public async Task DerivedXmlDCSInputFormatter_SendBadRequestForExceptions_IsTrue(bool isInputFormatException)
-        //{
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { new DerivedJsonInputFormatter(throwNonInputFormatterException: false) }, new MvcOptions());
 
-        //}
+            // Act
+            await binder.BindModelAsync(bindingContext);
 
-        //[Fact]
-        //public async Task DerivedJsonInputFormatter_SendBadRequestForExceptions_IsFalse_InputFormatException()
-        //{
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
 
-        //}
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            Assert.IsType<JsonReaderException>(entry.Value.Errors[0].Exception);
+        }
 
-        //[Fact]
-        //public async Task DerivedJsonInputFormatter_SendBadRequestForExceptions_IsFalse_NonInputFormatException()
-        //{
+        public static TheoryData<IInputFormatter> DerivedInputFormattersOptingOutOfMvcOptionsPolicy_AndThrowsNonInputFormatterException
+        {
+            get
+            {
+                return new TheoryData<IInputFormatter>()
+                {
+                    new DerivedXmlSerializerInputFormatter(throwNonInputFormatterException: true),
+                    new DerivedXmlDataContractSerializerInputFormatter(throwNonInputFormatterException: true),
+                };
+            }
+        }
 
-        //}
+        [Theory]
+        [MemberData(nameof(DerivedInputFormattersOptingOutOfMvcOptionsPolicy_AndThrowsNonInputFormatterException))]
+        public async Task BindModel_AddsErrorToModelState_ForDerivedXmlInputFormatters_ThrowingNonInputFormatingException(IInputFormatter formatter)
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = "application/xml";
 
-        //[Theory]
-        //[InlineData(true)]
-        //[InlineData(false)]
-        //public async Task DerivedJsonInputFormatter_SendBadRequestForExceptions_IsTrue(bool isInputFormatException)
-        //{
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
 
-        //}
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { formatter }, new MvcOptions());
+
+            // Act
+            await binder.BindModelAsync(bindingContext);
+
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
+
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
+            Assert.Equal("Bad input!!", errorMessage);
+            Assert.IsType<InvalidOperationException>(entry.Value.Errors[0].Exception);
+        }
+
+        [Fact]
+        public async Task BindModel_AddsErrorToModelState_ForDerivedJsonInputFormatter_ThrowingNonInputFormatingException()
+        {
+            // Arrange
+            var httpContext = new DefaultHttpContext();
+            httpContext.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes("Bad data!"));
+            httpContext.Request.ContentType = "application/json";
+
+            var metadataProvider = new TestModelMetadataProvider();
+            metadataProvider.ForType<Person>().BindingDetails(d => d.BindingSource = BindingSource.Body);
+
+            var bindingContext = GetBindingContext(typeof(Person), httpContext, metadataProvider);
+            var binder = CreateBinder(new[] { new DerivedJsonInputFormatter(throwNonInputFormatterException: true) }, new MvcOptions());
+
+            // Act
+            await binder.BindModelAsync(bindingContext);
+
+            // Assert
+            Assert.False(bindingContext.Result.IsModelSet);
+            Assert.Null(bindingContext.Result.Model);
+
+            // Key is the empty string because this was a top-level binding.
+            var entry = Assert.Single(bindingContext.ModelState);
+            Assert.Equal(string.Empty, entry.Key);
+            var errorMessage = Assert.Single(entry.Value.Errors).Exception.Message;
+            Assert.Equal("Bad input!!", errorMessage);
+            Assert.IsType<InvalidOperationException>(entry.Value.Errors[0].Exception);
+        }
 
         [Fact]
         public async Task NullFormatterError_AddedToModelState()
@@ -614,11 +700,6 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
             return new BodyModelBinder(formatters, new TestHttpRequestStreamReaderFactory(), loggerFactory, mvcOptions);
         }
 
-        private class Person
-        {
-            public string Name { get; set; }
-        }
-
         private class XyzFormatter : TextInputFormatter
         {
             private readonly Func<InputFormatterContext, Encoding, Task<InputFormatterResult>> _readRequestBodyAsync;
@@ -663,28 +744,143 @@ namespace Microsoft.AspNetCore.Mvc.ModelBinding.Binders
             }
         }
 
-        private class DerivedXmlSerializerInputFormatter : XmlSerializerInputFormatter
+        private class TestableJsonInputFormatter : JsonInputFormatter
         {
-            public override bool SendBadRequestForExceptionsDuringDeserialization => true;
+            private readonly bool _throwNonInputFormatterException;
+
+            public TestableJsonInputFormatter(bool throwNonInputFormatterException)
+                : base(GetLogger(), new JsonSerializerSettings(), ArrayPool<char>.Shared, new DefaultObjectPoolProvider())
+            {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
+            }
+
+            public override bool HandlesExceptions => true;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
+        }
+
+        private class TestableXmlSerializerInputFormatter : XmlSerializerInputFormatter
+        {
+            private bool _throwNonInputFormatterException;
+
+            public TestableXmlSerializerInputFormatter(bool throwNonInputFormatterException)
+            {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
+            }
+
+            public override bool HandlesExceptions => true;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
+        }
+
+        private class TestableXmlDataContractSerializerInputFormatter : XmlDataContractSerializerInputFormatter
+        {
+            private bool _throwNonInputFormatterException;
+
+            public TestableXmlDataContractSerializerInputFormatter(bool throwNonInputFormatterException)
+            {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
+            }
+
+            public override bool HandlesExceptions => true;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
         }
 
         private class DerivedJsonInputFormatter : JsonInputFormatter
         {
-            public DerivedJsonInputFormatter(
-                ILogger logger,
-                JsonSerializerSettings serializerSettings,
-                ArrayPool<char> charPool,
-                ObjectPoolProvider objectPoolProvider)
-                : base(logger, serializerSettings, charPool, objectPoolProvider)
+            private readonly bool _throwNonInputFormatterException;
+
+            public DerivedJsonInputFormatter(bool throwNonInputFormatterException)
+                : base(GetLogger(), new JsonSerializerSettings(), ArrayPool<char>.Shared, new DefaultObjectPoolProvider())
             {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
             }
 
-            public override bool SendBadRequestForExceptionsDuringDeserialization => true;
+            public override bool HandlesExceptions => false;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
+        }
+
+        private class DerivedXmlSerializerInputFormatter : XmlSerializerInputFormatter
+        {
+            private bool _throwNonInputFormatterException;
+
+            public DerivedXmlSerializerInputFormatter(bool throwNonInputFormatterException)
+            {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
+            }
+
+            public override bool HandlesExceptions => false;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
         }
 
         private class DerivedXmlDataContractSerializerInputFormatter : XmlDataContractSerializerInputFormatter
         {
-            public override bool SendBadRequestForExceptionsDuringDeserialization => true;
+            private bool _throwNonInputFormatterException;
+
+            public DerivedXmlDataContractSerializerInputFormatter(bool throwNonInputFormatterException)
+            {
+                _throwNonInputFormatterException = throwNonInputFormatterException;
+            }
+
+            public override bool HandlesExceptions => false;
+
+            public override Task<InputFormatterResult> ReadRequestBodyAsync(InputFormatterContext context, Encoding encoding)
+            {
+                if (_throwNonInputFormatterException)
+                {
+                    throw new InvalidOperationException("Bad input!!");
+                }
+                return base.ReadRequestBodyAsync(context, encoding);
+            }
+        }
+
+        private static ILogger GetLogger()
+        {
+            return NullLogger.Instance;
+        }
+
+        // 'public' as XmlSerializer does not like non-public types
+        public class Person
+        {
+            public string Name { get; set; }
         }
     }
 }

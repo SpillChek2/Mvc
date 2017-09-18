@@ -23,7 +23,7 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
     /// This class handles deserialization of input XML data
     /// to strongly-typed objects using <see cref="XmlSerializer"/>
     /// </summary>
-    public class XmlSerializerInputFormatter : TextInputFormatter, IInbuiltInputFormatter
+    public class XmlSerializerInputFormatter : TextInputFormatter, IFormatterExceptionPolicy
     {
         private readonly ConcurrentDictionary<Type, object> _serializerCache = new ConcurrentDictionary<Type, object>();
         private readonly XmlDictionaryReaderQuotas _readerQuotas = FormattingUtilities.GetDefaultXmlReaderQuotas();
@@ -77,7 +77,11 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
         /// </summary>
         public XmlDictionaryReaderQuotas XmlDictionaryReaderQuotas => _readerQuotas;
 
-        public virtual bool SendBadRequestForExceptionsDuringDeserialization => false;
+        /// <summary>
+        /// Gets the flag indicating if it honors the value in setting <see cref="MvcOptions.ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors"/>.
+        /// Default value is <see langword="true"/>.
+        /// </summary>
+        public virtual bool HandlesExceptions => GetType() == typeof(XmlSerializerInputFormatter);
 
         /// <inheritdoc />
         public override async Task<InputFormatterResult> ReadRequestBodyAsync(
@@ -131,14 +135,14 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
             }
             catch (Exception exception)
             {
-                if (SendBadRequestForExceptionsDuringDeserialization && exception is InvalidOperationException)
+                if (exception is InvalidOperationException)
                 {
                     // XmlSerializer wraps actual exceptions (like FormatException or XmlException) into an InvalidOperationException
                     // https://github.com/dotnet/corefx/blob/master/src/System.Private.Xml/src/System/Xml/Serialization/XmlSerializer.cs#L652
                     var innerException = exception.InnerException;
                     if (innerException is FormatException || innerException is XmlException)
                     {
-                        throw new InputFormatException("Error deserializing input", exception);
+                        throw new InputFormatterException(Resources.ErrorDeserializingInputData, exception);
                     }
                 }
 

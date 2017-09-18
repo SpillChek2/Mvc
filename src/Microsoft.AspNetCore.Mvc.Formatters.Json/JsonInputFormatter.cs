@@ -22,7 +22,7 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
     /// <summary>
     /// A <see cref="TextInputFormatter"/> for JSON content.
     /// </summary>
-    public class JsonInputFormatter : TextInputFormatter, IInbuiltInputFormatter
+    public class JsonInputFormatter : TextInputFormatter, IFormatterExceptionPolicy
     {
         private readonly IArrayPool<char> _charPool;
         private readonly ILogger _logger;
@@ -105,7 +105,11 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
             SupportedMediaTypes.Add(MediaTypeHeaderValues.ApplicationAnyJsonSyntax);
         }
 
-        public virtual bool SendBadRequestForExceptionsDuringDeserialization => false;
+        /// <summary>
+        /// Gets the flag indicating if it honors the value in setting <see cref="MvcOptions.ConvertAllExceptionsOfInbuiltInputFormattersToModelStateErrors"/>.
+        /// Default value is <see langword="true"/>.
+        /// </summary>
+        public virtual bool HandlesExceptions => GetType() == typeof(JsonInputFormatter);
 
         /// <summary>
         /// Gets the <see cref="JsonSerializerSettings"/> used to configure the <see cref="JsonSerializer"/>.
@@ -219,12 +223,7 @@ namespace Microsoft.AspNetCore.Mvc.Formatters
                         }
                     }
 
-                    if (SendBadRequestForExceptionsDuringDeserialization
-                        && (exception is JsonException || exception is OverflowException))
-                    {
-                        throw new InputFormatException("Error deserializing input", exception);
-                    }
-                    else
+                    if (!(exception is JsonException || exception is OverflowException))
                     {
                         var exceptionDispatchInfo = ExceptionDispatchInfo.Capture(exception);
                         exceptionDispatchInfo.Throw();
